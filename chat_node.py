@@ -1,5 +1,3 @@
-# Salve este código em um arquivo chamado multi_node_chat.py
-
 import grpc
 import chat_pb2
 import chat_pb2_grpc
@@ -19,11 +17,9 @@ class ChatServicer(chat_pb2_grpc.ChatServiceServicer):
         self.username = username
         
     def SendMessage(self, request, context):
-        # Ao receber uma mensagem, armazena na fila
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         print(f"\n[{timestamp}] {request.sender}: {request.content}")
         
-        # Coloca na fila para outros clientes conectados
         for client_id in self.clients:
             self.clients[client_id].put({
                 'sender': request.sender,
@@ -39,16 +35,13 @@ class ChatServicer(chat_pb2_grpc.ChatServiceServicer):
         )
     
     def StreamMessages(self, request, context):
-        # Identificador único para o cliente
         client_id = request.client_id
         
-        # Cria uma fila para este cliente
         self.clients[client_id] = queue.Queue()
         print(f"Novo cliente conectado: {client_id}")
         
         try:
             while context.is_active():
-                # Verifica se tem mensagens para este cliente
                 try:
                     msg = self.clients[client_id].get(timeout=1)
                     yield chat_pb2.MessageResponse(
@@ -58,7 +51,6 @@ class ChatServicer(chat_pb2_grpc.ChatServiceServicer):
                         success=True
                     )
                 except queue.Empty:
-                    # Não há mensagens, continua esperando
                     continue
         except Exception as e:
             print(f"Erro no StreamMessages: {e}")
@@ -77,10 +69,8 @@ def start_server(port, username):
     return server, servicer
 
 def stop_server_gracefully(server):
-    """Para o servidor de forma graciosa, permitindo que os clientes se desconectem"""
-    # Conceder algum tempo para que os clientes recebam a notificação de encerramento
     print("Parando servidor graciosamente...")
-    server.stop(2)  # 2 segundos de timeout
+    server.stop(2)
 
 class NodeConnection:
     def __init__(self, host, port, username):
@@ -101,11 +91,10 @@ class NodeConnection:
             self.channel = grpc.insecure_channel(f'{self.host}:{self.port}')
             self.stub = chat_pb2_grpc.ChatServiceStub(self.channel)
             
-            # Testar a conexão com uma chamada simples com timeout
             grpc.channel_ready_future(self.channel).result(timeout=2)
             
             self.connected = True
-            self.connection_attempt = 0  # Reset contador após sucesso
+            self.connection_attempt = 0
             print(f"Conectado a {self.host}:{self.port}")
             return True
         except grpc.FutureTimeoutError:
@@ -115,7 +104,6 @@ class NodeConnection:
             return False
         except Exception as e:
             self.connected = False
-            # Mostrar mensagem apenas na primeira tentativa ou a cada 5 tentativas
             if self.connection_attempt == 1 or self.connection_attempt % 5 == 0:
                 print(f"Tentativa {self.connection_attempt}: Não foi possível conectar a {self.host}:{self.port}: {e}")
             return False
@@ -131,9 +119,9 @@ class NodeConnection:
             if not self.connected:
                 if self.connect():
                     self.start_receiving()
-                time.sleep(5)  # Aguarda 5 segundos antes de tentar novamente
+                time.sleep(5) 
             else:
-                time.sleep(10)  # Se está conectado, verifica a cada 10 segundos
+                time.sleep(10)  
     
     def start_receiving(self):
         if self.connected and (not self.receive_thread or not self.receive_thread.is_alive()):
@@ -147,18 +135,15 @@ class NodeConnection:
         
         try:
             for response in self.stub.StreamMessages(request):
-                # A mensagem já será impressa pelo servidor
                 pass
         except grpc.RpcError as e:
             status_code = e.code()
-            # Verificar se o erro é de encerramento normal (peer encerrou a conexão)
             if status_code == grpc.StatusCode.UNAVAILABLE or status_code == grpc.StatusCode.CANCELLED:
                 print(f"Nó {self.host}:{self.port} desconectado.")
             else:
                 print(f"Erro na conexão com {self.host}:{self.port}: {e.details()} (código: {status_code})")
             
             self.connected = False
-            # Tentar reconectar automaticamente apenas se não for um encerramento intencional
             if self.should_reconnect:
                 self.start_reconnect_thread()
         except Exception as e:
@@ -169,7 +154,6 @@ class NodeConnection:
     
     def send_message(self, sender, content):
         if not self.connected:
-            # Não mostra mensagem, apenas retorna falso
             return False
             
         try:
@@ -192,7 +176,6 @@ class NodeConnection:
                 print(f"Erro ao enviar mensagem para {self.host}:{self.port}: {e.details()}")
             
             self.connected = False
-            # Tentar reconectar automaticamente
             if self.should_reconnect:
                 self.start_reconnect_thread()
             return False
@@ -214,9 +197,7 @@ class NodeConnection:
         print(f"Desconectado de {self.host}:{self.port}")
 
 def load_nodes_config(config_file="nodes.json"):
-    """Carrega a configuração dos nós a partir de um arquivo JSON"""
     if not os.path.exists(config_file):
-        # Cria um arquivo de configuração padrão se não existir
         default_config = [
             {"host": "localhost", "port": 50051},
             {"host": "localhost", "port": 50052},
@@ -239,35 +220,26 @@ def main():
         print("Exemplo: python multi_node_chat.py 50051 nodes.json")
         sys.exit(1)
     
-    # Porta local para este nó
     local_port = int(sys.argv[1])
     
-    # Arquivo de configuração (opcional)
     config_file = sys.argv[2] if len(sys.argv) > 2 else "nodes.json"
     
-    # Nome de usuário para este nó
     username = input("Digite seu nome de usuário: ")
     
-    # Iniciar o servidor local
     server, servicer = start_server(local_port, username)
     
-    # Carregar configuração de nós
     nodes_config = load_nodes_config(config_file)
     
-    # Lista de conexões com outros nós
     connections = []
     
-    # Conectar a outros nós
     for node in nodes_config:
         host = node["host"]
         port = node["port"]
         
-        # Pular este nó (não conectar a si mesmo)
         if port == local_port and host in ["localhost", "127.0.0.1"]:
             continue
             
         connection = NodeConnection(host, port, username)
-        # Iniciar thread de reconexão automática
         connection.start_reconnect_thread()
         connections.append(connection)
     
@@ -278,7 +250,6 @@ def main():
     print("\nChat iniciado! Você pode começar a enviar mensagens mesmo sem conexões ativas.")
     print("Os nós conectarão automaticamente assim que estiverem disponíveis.")
     
-    # Loop principal para enviar mensagens
     try:
         while True:
             try:
@@ -309,20 +280,17 @@ def main():
             elif not message.strip():
                 continue
             
-            # Enviar a mensagem para todos os nós conectados
             sent_count = 0
             for conn in connections:
                 if conn.connected and conn.send_message(username, message):
                     sent_count += 1
             
-            # Se não conseguiu enviar para ninguém mas existem nós configurados
             if sent_count == 0 and connections:
                 print(f"[SISTEMA] Mensagem armazenada localmente. Será enviada quando houver conexões disponíveis.")
     
     except KeyboardInterrupt:
         print("\nEncerrando chat...")
     finally:
-        # Desativar tentativas de reconexão antes de desconectar
         for conn in connections:
             conn.should_reconnect = False
             
