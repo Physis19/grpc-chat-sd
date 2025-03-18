@@ -1,5 +1,3 @@
-# Salve este código em um arquivo chamado multi_node_chat.py
-
 import grpc
 import chat_pb2
 import chat_pb2_grpc
