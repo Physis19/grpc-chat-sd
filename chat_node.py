@@ -76,6 +76,12 @@ def start_server(port, username):
     print(f"Servidor iniciado na porta {port}")
     return server, servicer
 
+def stop_server_gracefully(server):
+    """Para o servidor de forma graciosa, permitindo que os clientes se desconectem"""
+    # Conceder algum tempo para que os clientes recebam a notificação de encerramento
+    print("Parando servidor graciosamente...")
+    server.stop(2)  # 2 segundos de timeout
+
 class NodeConnection:
     def __init__(self, host, port, username):
         self.host = host
@@ -102,6 +108,11 @@ class NodeConnection:
             self.connection_attempt = 0  # Reset contador após sucesso
             print(f"Conectado a {self.host}:{self.port}")
             return True
+        except grpc.FutureTimeoutError:
+            self.connected = False
+            if self.connection_attempt == 1 or self.connection_attempt % 5 == 0:
+                print(f"Tentativa {self.connection_attempt}: Tempo esgotado ao conectar a {self.host}:{self.port}")
+            return False
         except Exception as e:
             self.connected = False
             # Mostrar mensagem apenas na primeira tentativa ou a cada 5 tentativas
@@ -139,10 +150,22 @@ class NodeConnection:
                 # A mensagem já será impressa pelo servidor
                 pass
         except grpc.RpcError as e:
+            status_code = e.code()
+            # Verificar se o erro é de encerramento normal (peer encerrou a conexão)
+            if status_code == grpc.StatusCode.UNAVAILABLE or status_code == grpc.StatusCode.CANCELLED:
+                print(f"Nó {self.host}:{self.port} desconectado.")
+            else:
+                print(f"Erro na conexão com {self.host}:{self.port}: {e.details()} (código: {status_code})")
+            
+            self.connected = False
+            # Tentar reconectar automaticamente apenas se não for um encerramento intencional
+            if self.should_reconnect:
+                self.start_reconnect_thread()
+        except Exception as e:
             print(f"Conexão com {self.host}:{self.port} perdida: {e}")
             self.connected = False
-            # Tentar reconectar automaticamente
-            self.start_reconnect_thread()
+            if self.should_reconnect:
+                self.start_reconnect_thread()
     
     def send_message(self, sender, content):
         if not self.connected:
@@ -159,11 +182,25 @@ class NodeConnection:
                 )
             )
             return response.success
-        except Exception as e:
-            print(f"Erro ao enviar mensagem para {self.host}:{self.port}: {e}")
+        except grpc.RpcError as e:
+            status_code = e.code()
+            if status_code == grpc.StatusCode.DEADLINE_EXCEEDED:
+                print(f"Tempo esgotado ao enviar mensagem para {self.host}:{self.port}")
+            elif status_code == grpc.StatusCode.UNAVAILABLE:
+                print(f"Nó {self.host}:{self.port} está indisponível")
+            else:
+                print(f"Erro ao enviar mensagem para {self.host}:{self.port}: {e.details()}")
+            
             self.connected = False
             # Tentar reconectar automaticamente
-            self.start_reconnect_thread()
+            if self.should_reconnect:
+                self.start_reconnect_thread()
+            return False
+        except Exception as e:
+            print(f"Erro inesperado ao enviar mensagem para {self.host}:{self.port}: {e}")
+            self.connected = False
+            if self.should_reconnect:
+                self.start_reconnect_thread()
             return False
     
     def disconnect(self):
@@ -171,9 +208,10 @@ class NodeConnection:
         if self.channel:
             try:
                 self.channel.close()
-            except:
-                pass
+            except Exception as e:
+                print(f"Erro ao fechar canal para {self.host}:{self.port}: {e}")
         self.connected = False
+        print(f"Desconectado de {self.host}:{self.port}")
 
 def load_nodes_config(config_file="nodes.json"):
     """Carrega a configuração dos nós a partir de um arquivo JSON"""
@@ -284,10 +322,15 @@ def main():
     except KeyboardInterrupt:
         print("\nEncerrando chat...")
     finally:
+        # Desativar tentativas de reconexão antes de desconectar
+        for conn in connections:
+            conn.should_reconnect = False
+            
         print("Desconectando de todos os nós...")
         for conn in connections:
             conn.disconnect()
-        server.stop(0)
+        
+        stop_server_gracefully(server)
         print("Chat encerrado.")
 
 if __name__ == "__main__":

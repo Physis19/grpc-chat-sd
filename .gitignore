@@ -3,3 +3,4 @@ __pycache__
 nodes.json
 chat_pb2_grpc.py 
 chat_pb2.py 
+venv
